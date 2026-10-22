@@ -8,6 +8,7 @@ directory.
 
 import io
 import json
+import shlex
 import sys
 import urllib.error
 from unittest.mock import patch
@@ -206,7 +207,7 @@ def test_headers_string_type_error_named(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "load_config", lambda: bad_config)
     with pytest.raises(SystemExit) as exc:
         cli._interpolate_headers(bad_config["environments"]["default"]["headers"], {})
-    assert ".git-api/config.json" in str(exc.value)
+    assert str(cli.CONFIG_FILE) in str(exc.value)
     assert "headers must be an object" in str(exc.value)
 
 
@@ -490,11 +491,43 @@ def test_repl_curl_exports_saved_request(capsys, monkeypatch):
     cli.save_request("seeded", "post", "https://api.example.com/x",
                      {"X-Token": "abc"}, "payload", 200, {}, "ok")
     _run_repl(["curl seeded", "quit"], monkeypatch)
-    # Each flag lands on its own shell-continuation line.
     out = capsys.readouterr().out
-    flat = " ".join(out.replace("\\\n", " ").split())
-    assert "curl -X POST -H X-Token: abc -d payload " \
-           "https://api.example.com/x" in flat
+    command = next(line for line in out.splitlines() if line.startswith("curl "))
+    assert shlex.split(command) == [
+        "curl", "-X", "POST", "-H", "X-Token: abc", "-d", "payload",
+        "https://api.example.com/x",
+    ]
+
+
+def test_repl_curl_interpolates_and_quotes_saved_request(capsys, monkeypatch):
+    cli.init()
+    config = cli.load_config()
+    config["environments"]["default"].update({
+        "base_url": "https://api.example.com",
+        "ITEM": "item 7",
+        "QUERY": "a b&c",
+        "TOKEN": "token with spaces",
+        "NAME": "Widget 2",
+        "NOTE": "work & home",
+    })
+    cli.CONFIG_FILE.write_text(json.dumps(config))
+    cli.save_request(
+        "seeded", "post", "{{base_url}}/v1/items/{{ITEM}}?q={{QUERY}}",
+        {"Authorization": "Bearer {{TOKEN}}", "X-Note": 'say "hi" & stay'},
+        "name={{NAME}} & note={{NOTE}}", 200, {}, "ok",
+    )
+
+    _run_repl(["curl seeded", "quit"], monkeypatch)
+
+    out = capsys.readouterr().out
+    command = next(line for line in out.splitlines() if line.startswith("curl "))
+    assert shlex.split(command) == [
+        "curl", "-X", "POST",
+        "-H", "Authorization: Bearer token with spaces",
+        "-H", 'X-Note: say "hi" & stay',
+        "-d", "name=Widget 2 & note=work & home",
+        "https://api.example.com/v1/items/item 7?q=a b&c",
+    ]
 
 
 def test_repl_curl_without_name_shows_usage(capsys, monkeypatch):

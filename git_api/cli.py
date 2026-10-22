@@ -501,13 +501,23 @@ def main():
                 continue
             data = json.loads(req_file.read_text())
             req = data["request"]
+            url = resolve_url(_interpolate(req["url"], env), env)
+            headers = _interpolate_headers(req.get("headers", {}), env)
+            body = req.get("body")
+            if body is not None:
+                body = _interpolate(body, env)
+            _warn_unresolved(url, env, "URL")
+            for hname, hvalue in headers.items():
+                _warn_unresolved(hvalue, env, f"header {hname}")
+            if body is not None:
+                _warn_unresolved(body, env, "body")
             parts_curl = ["curl", "-X", req["method"]]
-            for k, v in req.get("headers", {}).items():
+            for k, v in headers.items():
                 parts_curl += ["-H", f"{k}: {v}"]
-            if req.get("body"):
-                parts_curl += ["-d", req["body"]]
-            parts_curl.append(req["url"])
-            print(" \\\n   ".join(parts_curl))
+            if body:
+                parts_curl += ["-d", body]
+            parts_curl.append(url)
+            print(shlex.join(parts_curl))
         elif cmd == "SAVE":
             if len(parts) < 2:
                 print("Usage: save NAME [--force]")
